@@ -2,11 +2,15 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
+
+var directoryFlag *string
 
 type Headers map[string]string
 
@@ -54,6 +58,28 @@ func ReadEchoMessage(path string) string {
 	return strings.TrimSpace(msg)
 }
 
+func HandleFile(conn net.Conn, filename string) {
+	filePath := filepath.Join(*directoryFlag, filename)
+	_, err := os.Stat(filePath)
+	if err != nil {
+		conn.Write([]byte("HTTP/1.1 404 NotFound\r\n\r\n"))
+		return
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		conn.Write([]byte("HTTP/1.1 404 NotFound\r\n\r\n"))
+		return
+	}
+
+	conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
+	conn.Write([]byte("Content-Type: application/octet-stream\r\n"))
+	conn.Write([]byte(fmt.Sprintf("Content-Length: %d", len(data))))
+	conn.Write([]byte("\r\n\r\n"))
+	conn.Write(data)
+	conn.Write([]byte("\r\n"))
+}
+
 func HandleConnection(conn net.Conn) {
 	defer conn.Close()
 
@@ -82,6 +108,10 @@ func HandleConnection(conn net.Conn) {
 		conn.Write([]byte("\r\n\r\n"))
 		conn.Write([]byte(message))
 		conn.Write([]byte("\r\n"))
+	} else if strings.HasPrefix(req.Path, "/files") {
+		_, filename, _ := strings.Cut(req.Path, "/files/")
+		filename = strings.TrimSpace(filename)
+		HandleFile(conn, filename)
 	} else {
 		conn.Write([]byte("HTTP/1.1 404 NotFound\r\n\r\n"))
 	}
@@ -93,6 +123,10 @@ func main() {
 		fmt.Println("Failed to bind to port 4221")
 		os.Exit(1)
 	}
+
+	directoryFlag = flag.String("directory", ".", "directory of files to serve")
+	flag.Parse() // parse os.Args[1:]
+	fmt.Println("directory flag:", *directoryFlag)
 
 	for {
 		conn, err := listener.Accept()

@@ -21,7 +21,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	rawBody := make([]byte, 1024)
+	rawBody := make([]byte, 2048)
 	_, err = conn.Read(rawBody)
 	if err != nil {
 		fmt.Println("Failed to read bytes from connection: ", err.Error())
@@ -32,9 +32,20 @@ func main() {
 	bodyLines := strings.Split(body, "\r\n")
 	startLine := strings.SplitN(bodyLines[0], " ", 3)
 
+	path := startLine[1]
 	var response []byte
-	if startLine[1] == "/" {
+	if path == "/" {
 		response = []byte("HTTP/1.1 200 OK\r\n\r\n")
+	} else if path != "/" {
+		pathParts := strings.SplitN(path, "/", 3)
+		command := pathParts[1]
+		message := pathParts[2]
+		if command == "echo" {
+			contentLength := len(message)
+			response = []byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s\r\n\r\n", contentLength, message))
+		} else {
+			response = []byte("HTTP/1.1 404 NotFound\r\n\r\n")
+		}
 	} else {
 		response = []byte("HTTP/1.1 404 NotFound\r\n\r\n")
 	}

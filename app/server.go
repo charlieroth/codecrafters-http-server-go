@@ -20,6 +20,7 @@ type Request struct {
 	HttpVersion string
 	Headers     Headers
 	UserAgent   string
+	Body        []byte
 }
 
 func ReadRequest(conn net.Conn) (Request, error) {
@@ -36,9 +37,7 @@ func ReadRequest(conn net.Conn) (Request, error) {
 		return Request{}, fmt.Errorf("invalid request line")
 	}
 
-	method := parts[0]
-	path := parts[1]
-	httpVersion := parts[2]
+	method, path, httpVersion := parts[0], parts[1], parts[2]
 	headers := make(Headers)
 	for {
 		line, err = reader.ReadString('\n')
@@ -49,7 +48,16 @@ func ReadRequest(conn net.Conn) (Request, error) {
 		headers[parts[0]] = strings.TrimSpace(parts[1])
 	}
 
-	req := Request{Method: method, Path: path, HttpVersion: httpVersion, Headers: headers}
+	body := []byte{}
+	for reader.Buffered() > 0 {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return Request{}, fmt.Errorf("failed to read byte of body")
+		}
+		body = append(body, b)
+	}
+
+	req := Request{Method: method, Path: path, HttpVersion: httpVersion, Headers: headers, Body: body}
 	return req, nil
 }
 
@@ -58,7 +66,22 @@ func ReadEchoMessage(path string) string {
 	return strings.TrimSpace(msg)
 }
 
-func HandleFile(conn net.Conn, filename string) {
+func HandleFilePost(req Request, conn net.Conn, filename string) {
+	filePath := filepath.Join(*directoryFlag, filename)
+	file, err := os.Create(filePath)
+	if err != nil {
+		conn.Write([]byte("HTTP/1.1 404 NotFound\r\n\r\n"))
+		return
+	}
+	defer file.Close()
+
+	file.Write(req.Body)
+	conn.Write([]byte("HTTP/1.1 201 Created\r\n"))
+	conn.Write([]byte("Content-Type: text/plain\r\n"))
+	conn.Write([]byte(fmt.Sprintf("Content-Length: %d\r\n\r\n", len(req.Body))))
+}
+
+func HandleFileGet(conn net.Conn, filename string) {
 	filePath := filepath.Join(*directoryFlag, filename)
 	_, err := os.Stat(filePath)
 	if err != nil {
@@ -111,7 +134,11 @@ func HandleConnection(conn net.Conn) {
 	} else if strings.HasPrefix(req.Path, "/files") {
 		_, filename, _ := strings.Cut(req.Path, "/files/")
 		filename = strings.TrimSpace(filename)
-		HandleFile(conn, filename)
+		if req.Method == "POST" {
+			HandleFilePost(req, conn, filename)
+		} else {
+			HandleFileGet(conn, filename)
+		}
 	} else {
 		conn.Write([]byte("HTTP/1.1 404 NotFound\r\n\r\n"))
 	}

@@ -1,11 +1,58 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"os"
 	"strings"
 )
+
+type Headers map[string]string
+
+type Request struct {
+	Method      string
+	Path        string
+	HttpVersion string
+	Headers     Headers
+	UserAgent   string
+}
+
+func ReadRequest(conn net.Conn) (Request, error) {
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return Request{}, err
+	}
+
+	line = strings.TrimSpace(line)
+	line = strings.TrimSpace(line)
+	parts := strings.Split(line, " ")
+	if len(parts) < 3 {
+		return Request{}, fmt.Errorf("invalid request line")
+	}
+
+	method := parts[0]
+	path := parts[1]
+	httpVersion := parts[2]
+	headers := make(Headers)
+	for {
+		line, err = reader.ReadString('\n')
+		if line == "\r\n" {
+			break
+		}
+		parts = strings.Split(line, ":")
+		headers[parts[0]] = strings.TrimSpace(parts[1])
+	}
+
+	req := Request{Method: method, Path: path, HttpVersion: httpVersion, Headers: headers}
+	return req, nil
+}
+
+func ReadEchoMessage(path string) string {
+	_, msg, _ := strings.Cut(path, "/echo/")
+	return strings.TrimSpace(msg)
+}
 
 func main() {
 	listener, err := net.Listen("tcp", "0.0.0.0:4221")
@@ -21,31 +68,32 @@ func main() {
 	}
 	defer conn.Close()
 
-	rawBody := make([]byte, 2048)
-	_, err = conn.Read(rawBody)
+	req, err := ReadRequest(conn)
 	if err != nil {
-		fmt.Println("Failed to read bytes from connection: ", err.Error())
+		fmt.Println("Failed to read request: ", err.Error())
 		os.Exit(1)
 	}
 
-	body := string(rawBody[:])
-	bodyLines := strings.Split(body, "\r\n")
-	startLine := strings.SplitN(bodyLines[0], " ", 3)
-
-	path := startLine[1]
 	var response []byte
-	if path == "/" {
+	if req.Path == "/" {
 		response = []byte("HTTP/1.1 200 OK\r\n\r\n")
-	} else if path != "/" {
-		pathParts := strings.SplitN(path, "/", 3)
-		command := pathParts[1]
-		message := pathParts[2]
-		if command == "echo" {
-			contentLength := len(message)
-			response = []byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s\r\n\r\n", contentLength, message))
-		} else {
-			response = []byte("HTTP/1.1 404 NotFound\r\n\r\n")
-		}
+	} else if req.Path == "/user-agent" {
+		contentLength := fmt.Sprintf("Content-Length: %d", len(req.Headers["User-Agent"]))
+		conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
+		conn.Write([]byte("Content-Type: text/plain\r\n"))
+		conn.Write([]byte(contentLength))
+		conn.Write([]byte("\r\n\r\n"))
+		conn.Write([]byte(req.Headers["User-Agent"]))
+		conn.Write([]byte("\r\n"))
+	} else if strings.HasPrefix(req.Path, "/echo") {
+		message := ReadEchoMessage(req.Path)
+		contentLength := fmt.Sprintf("Content-Length: %d", len(message))
+		conn.Write([]byte("HTTP/1.1 200 OK\r\n"))
+		conn.Write([]byte("Content-Type: text/plain\r\n"))
+		conn.Write([]byte(contentLength))
+		conn.Write([]byte("\r\n\r\n"))
+		conn.Write([]byte(message))
+		conn.Write([]byte("\r\n"))
 	} else {
 		response = []byte("HTTP/1.1 404 NotFound\r\n\r\n")
 	}
